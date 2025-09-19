@@ -1,0 +1,351 @@
+---
+title: "Evolució de la renda disponible individual ajustada al IPC (2004-2023)"
+author: "Jordi Rosell"
+embed-resources: false
+image: "comparacio.png"
+format:
+  closeread-html: # quarto add qmd-lab/closeread
+    theme: cosmo
+    remove-header-space: true
+    debug-mode: false
+    layout: "sidebar-left"
+    cr-style:    
+      narrative-sidebar-width: minmax(384px, 1fr)
+      narrative-text-color-sidebar: white    
+      narrative-border-radius: 5px
+      narrative-background-color-overlay: "#111111dd"
+      narrative-background-color-sidebar: "#111111"
+      section-background-color: white
+      narrative-font-family: "Roboto Black"
+      poem-font-family: "Roboto Black"
+---
+
+<h1 style="padding-top:300px">Com ha evolucionat el poder adquisitiu a Espanya?</h1>
+
+
+Aquesta presentació analitza la **renda disponible individual** ajustada i no ajustada al IPC entre 2004 i 2023 a Espanya.
+
+<div style="padding-top:300px"></div>
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE, error=FALSE}
+if (!requireNamespace("pak")) stop("Error: Please install.packages(\"pak\")")
+pkgs <- rlang::chr(
+  "rlang" = "rlang",  
+  "tidyverse",  
+  "ggplot2",
+  "patchwork",
+  "scales",
+  "lubridate",
+  "gganimate",
+  "gifski",
+  "magick",
+  "eurostat",
+  "httr2",
+  "jsonlite",
+  "dplyr",  
+  "ragg",
+  "plumber2",
+  "quarto",
+  "jrrosell" = "jrosell/jrrosell",  
+)
+# pak::pak(pkgs)
+libs <- ifelse(names(pkgs) == "", pkgs, names(pkgs))
+lapply(libs, library, quiet = TRUE, character.only = TRUE) |> invisible()
+path_font <- systemfonts::system_fonts() |>
+  dplyr::filter(grepl("Roboto", family)) |>
+  dplyr::filter(grepl("/Roboto-Black.ttf", path)) |>
+  pull(path) |>
+  head(1)
+if (length(path_font) == 0) {
+  rlang::abort("Install Roboto font.")
+}
+sysfonts::font_add("Roboto Black", regular = path_font)
+showtext::showtext_auto()
+theme_set_roboto_darkblue(base_size = 18, plot_title_size = 28)
+
+download_ine <- \(table, path = "", tip = "A") {
+  if (!is_string(table)) abort("`table` is required and must be a string. Ex: 11102")
+  if (!is_string(path)) abort("`path` is required and must be a string. Default is \"\". Ex: t00/ICV/dim1/l0/")  
+  if (!is_string(tip)) abort("`tip` must be a string.")
+  
+  url <- glue::glue("https://servicios.ine.es/wstempus/js/ES/DATOS_TABLA/{path}{table}.px?tip=A")
+  url |>
+    read_json() |>     
+    pluck(1, "Data") |> 
+    bind_rows()
+}
+  
+file_path <-"output-paritat-poder-adquisitiu-2004.csv"
+if (!file.exists(file_path)) {
+  income_per_capita_by_year <- download_ine("11102", path = "t00/ICV/dim1/l0/") |>
+    transmute(year = as.integer(NombrePeriodo), income_per_capita = Valor) 
+
+  ipc_by_year <- download_ine("50934") |> 
+    filter(T3_TipoDato == "Definitivo") |> 
+    filter(T3_Periodo == "A") |>   
+    transmute(year = as.integer(Anyo), ipc = Valor)
+
+  df <- left_join(income_per_capita_by_year, ipc_by_year, by = join_by(year)) |> 
+    mutate(
+      ipc_base2004 = ipc / ipc[year == 2004] * 100,
+      income_base2004 = income_per_capita / (ipc_base2004 / 100)
+    ) |> 
+    arrange(year)
+  df |> write_csv(file_path)
+}
+df <- read_csv(file_path, show_col_types = FALSE)
+```
+
+:::::::::::: cr-section
+
+Ens descarreguem les dades anuals de l’IPC i de la renda per càpita de l’INE.  @cr-download_ine
+
+::: {#cr-download_ine}
+
+```{r, results='asis'}
+cat('<div style="max-width:384px; overflow-x:auto;"><pre>')
+df
+cat('</pre></div>')
+```
+
+:::
+
+
+Analitzem les dades de la renda disponible individual. @cr-individual
+
+::: {#cr-individual}
+
+```{r individual}
+p <- ggplot(df, aes(x = year, y = income_per_capita)) +
+  geom_line() +  
+  geom_point() +
+  scale_y_continuous(
+    labels = label_number(prefix = "€", big.mark = ".", decimal.mark = ",")
+  ) +
+  labs(
+    title = "Evolució de la renda disponible individual",
+    x = "",
+    y = "",
+    caption = "Autor @jrosell | Font INE"
+  )
+ggsave("individual.png", p, width = 1200, height = 800, units="px", dpi = 96)
+```
+
+![](individual.png)
+
+
+:::
+
+Mirem les dades de IPC. @cr-ipc
+
+::: {#cr-ipc}
+
+```{r ipc, fig.width=8, fig.height=8, dpi=96}
+p <- ggplot(df, aes(x = year, y = ipc)) +
+  geom_line() +  
+  geom_point() +
+  scale_y_continuous(
+    labels = label_number(suffix = "%")
+  ) +
+  labs(
+    title = "Evolució del IPC (Base 2021)",
+    x = "",
+    y = "",
+    caption = "Autor @jrosell | Font INE"
+  )
+ggsave("ipc.png", p, width = 1200, height = 800, units="px", dpi = 96)
+```
+
+
+![](ipc.png)
+
+
+:::
+
+Calculem la renda disponible individual ajustada segons l’IPC. @cr-ajustada
+
+::: {#cr-ajustada}
+
+```{r ajustada}
+p <-  ggplot(df, aes(x = year, y = income_base2004)) +
+  geom_line() +  
+  geom_point() +
+  scale_y_continuous(
+    labels = label_number(prefix = "€", big.mark = ".", decimal.mark = ",")
+  ) +
+  labs(
+    title = "Evolució de la renda ajustada",
+    subtitle = "Base 2004",
+    x = "",
+    y = "",
+    caption = "Autor @jrosell | Font INE"
+  )
+
+ggsave("ajustada.png", p, width = 1200, height = 800, units="px", dpi = 96)
+```
+
+
+![](ajustada.png)
+
+:::
+
+I fem la comparació. @cr-comparacio
+
+::: {#cr-comparacio}
+
+```{r comparacio}
+
+p <- df |> 
+  pivot_longer(c(income_per_capita, income_base2004)) |> 
+  mutate(
+    name = name |> 
+      str_replace("income_base2004", "Ajustada al IPC") |> 
+      str_replace("income_per_capita", "Sense ajustar")
+  ) |> 
+  ggplot(aes(x = year, y = value, group = name, colour = name)) +
+  geom_line() +  
+  geom_point() +
+  scale_y_continuous(
+    labels = label_number(prefix = "€", big.mark = ".", decimal.mark = ",")
+  ) +
+  theme(
+    legend.position = "top"
+  ) +
+  labs(
+    title = "Comparació de la renda per càpita",
+    x = "",
+    y = "",
+    colour = "",
+    caption = "Autor @jrosell | Font INE"
+  )
+
+ggsave("comparacio.png", p, width = 1200, height = 800, units="px", dpi = 96)
+```
+
+
+![](comparacio.png){.feature}
+
+:::
+
+::::::::::::
+
+
+```{r make-gif, echo=FALSE, warning=FALSE, message=FALSE, error=FALSE}
+df_long <- df |> 
+  pivot_longer(c(income_per_capita, income_base2004)) |> 
+  mutate(
+    year = as.integer(year),
+    name = name |> 
+      str_replace("income_base2004", "Ajustada al IPC") |> 
+      str_replace("income_per_capita", "Sense ajustar")
+  )
+
+# Text només a partir del 2009
+y_2009 <- df_long |> 
+  filter(year == 2009, name == "Ajustada al IPC") |> 
+  pull(value)
+text_2009 <- tibble(
+  year = as.integer(2009:2023),
+  y = y_2009,
+  label = paste0(
+    "Encara no hem recuperat els ",
+    label_number(prefix = "€", big.mark = ".", decimal.mark = ",")(y_2009),
+    "del 2009"
+  )
+)
+y_2023 <- df_long |> 
+  filter(year == 2023, name == "Ajustada al IPC") |> 
+  pull(value)
+text_2023 <- tibble(
+  year = 2023L,
+  y = y_2023,
+  label = paste0(
+    label_number(prefix = "€", big.mark = ".", decimal.mark = ",")(y_2023),
+    " el 2023"
+  )  
+)
+
+p <- ggplot(df_long, aes(x = year, y = value, group = name, colour = name)) +
+  geom_line(linewidth = 1, na.rm = TRUE) +
+  geom_point(size = 2) +
+  ggrepel::geom_text_repel(
+    data = text_2009,
+    aes(x = 2009, y = y, label = label),
+    colour = "red", hjust = 0.5, vjust = -12, inherit.aes = FALSE,
+    size = 7,
+    arrow = arrow(length = unit(0.1, "inches")),
+    segment.linetype = "dashed"
+  ) +
+  ggrepel::geom_text_repel(
+    data = text_2023,
+    aes(x = 2023, y = y, label = label),
+    colour = "red", hjust = 0.5, vjust = -5, inherit.aes = FALSE,
+    size = 7,
+    arrow = arrow(length = unit(0.1, "inches")),
+    segment.linetype = "dashed"
+  ) +
+  scale_y_continuous(
+    labels = label_number(prefix = "€", big.mark = ".", decimal.mark = ",")
+  ) +
+  theme(legend.position = "top") +
+  labs(
+    title = "Evolució 2004-2023 (Base 2004)",
+    x = "",
+    y = "",
+    colour = "",
+    caption = "Autor @jrosell | Font INE"
+  )
+
+anim_file <- "output-paritat-poder-adquisitiu-2004.gif"
+anim_object <- animate(
+  p + 
+    transition_reveal(year) +
+    shadow_mark(alpha = 1, size = 0),
+  renderer = gifski_renderer(anim_file, loop = FALSE),
+  width = 1200,
+  height = 800,
+  units = "px",
+  dpi = 96,
+  fps = 10,
+  device = "png",
+  duration = 6  
+)
+```
+
+<figure class="figure">
+  <p><img id="make-gif" src="output-paritat-poder-adquisitiu-2004.gif" class="img-fluid figure-img"></p>
+</figure>
+
+<div>
+  <button id="restart-btn" style="width:156px;float: left;margin-right:10px;margin-bottom:10px;">
+  Veure l’animació
+  </button>
+  <button id="share-btn" style="width:156px; float: left;margin-right:10px;margin-bottom:10px;">
+  Copiar URL
+  </button>
+</div>
+
+<script>
+document.getElementById("restart-btn").addEventListener("click", function() {
+  const img = document.getElementById("make-gif");
+  const src = img.src.split("?")[0]; 
+  img.src = src + "?t=" + new Date().getTime();
+});
+document.getElementById("share-btn").addEventListener("click", function() {
+  const img = document.getElementById("make-gif");
+  const url = img.src.split("?")[0]; // URL neta sense timestamp
+  navigator.clipboard.writeText(url)
+    .then(() => {
+      alert("URL copiada al portapapers. Ja pots compartir-la on vulguis.");
+    })
+    .catch(err => {
+      alert("Comparteix la URL: " + url);
+    });
+});
+</script>
+
+\
+
+License: <a href="https://creativecommons.org/licenses/by-nc/2.5/" target="_blank">CC BY-NC 2.5</a>
+
+Code: <a href="https://github.com/jrosell/scrollytelling/blob/main/posts/renda.qmd" target="_blank">github repo</a>
